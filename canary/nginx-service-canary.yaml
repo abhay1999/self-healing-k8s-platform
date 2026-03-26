@@ -1,0 +1,22 @@
+# Dedicated service for canary pods.
+# The Nginx canary ingress routes its weighted traffic here.
+# Unlike the stable service (which selects by app only), this service
+# uses both app + track labels so it only reaches canary pods.
+#
+# Apply with: kubectl apply -f canary/nginx-service-canary.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: app-a-canary
+  labels:
+    app: app-a
+    track: canary
+spec:
+  type: ClusterIP
+  selector:
+    app: app-a
+    track: canary    # routes ONLY to canary pods
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080

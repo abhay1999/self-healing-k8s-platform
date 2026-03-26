@@ -1,0 +1,27 @@
+# Stable ingress — primary entrypoint for all traffic.
+# The canary ingress (nginx-ingress-canary.yaml) intercepts a weighted
+# percentage before requests reach this backend.
+#
+# Prerequisites:
+#   minikube addons enable ingress
+#   echo "$(minikube ip) app.local" | sudo tee -a /etc/hosts
+#
+# Apply with: kubectl apply -f canary/nginx-ingress-stable.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: app-a
+  annotations:
+    kubernetes.io/ingress.class: nginx
+spec:
+  rules:
+    - host: app.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: app-a      # stable service
+                port:
+                  number: 80

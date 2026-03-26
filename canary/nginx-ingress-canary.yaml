@@ -1,0 +1,34 @@
+# Canary ingress — Nginx routes canary-weight % of requests here.
+# All other requests fall through to the stable ingress.
+#
+# Key annotations:
+#   canary: "true"          marks this as the canary ingress
+#   canary-weight: "10"     10% of requests go to app-a-canary service
+#
+# Adjust canary-weight (0–100) to control traffic percentage:
+#   kubectl annotate ingress app-a-canary \
+#     nginx.ingress.kubernetes.io/canary-weight="25" --overwrite
+#
+# Apply with:
+#   kubectl apply -f canary/nginx-service-canary.yaml
+#   kubectl apply -f canary/nginx-ingress-canary.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: app-a-canary
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/canary: "true"
+    nginx.ingress.kubernetes.io/canary-weight: "10"   # exactly 10% to canary
+spec:
+  rules:
+    - host: app.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: app-a-canary   # dedicated canary service
+                port:
+                  number: 80

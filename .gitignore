@@ -1,0 +1,23 @@
+# Go binaries
+app/server
+controller/controller
+
+# Go sum files (commit go.sum, not these)
+vendor/
+
+# Kubernetes secrets
+*.kubeconfig
+kubeconfig
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Planning / personal files
+*.pdf
+*.jpeg
+*.jpg
+*.png

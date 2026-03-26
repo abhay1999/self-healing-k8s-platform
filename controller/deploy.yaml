@@ -1,0 +1,51 @@
+# Deploy the custom controller as a pod inside the cluster
+# kubectl apply -f controller/deploy.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: self-healing-controller
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: self-healing-controller
+  template:
+    metadata:
+      labels:
+        app: self-healing-controller
+    spec:
+      serviceAccountName: self-healing-controller
+      containers:
+        - name: controller
+          image: yourdockerhubusername/self-healing-controller:latest
+          imagePullPolicy: Always
+---
+# RBAC — give the controller permission to watch and delete pods
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: self-healing-controller
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: self-healing-controller
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: self-healing-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: self-healing-controller
+subjects:
+  - kind: ServiceAccount
+    name: self-healing-controller
+    namespace: default

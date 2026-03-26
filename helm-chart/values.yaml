@@ -1,0 +1,72 @@
+replicaCount: 2
+
+# appName is the shared label used for service discovery.
+# Set this to the stable release name so canary pods are picked up by the same service.
+appName: ""   # defaults to .Release.Name when empty
+
+# track differentiates stable vs canary pods within the same service.
+# Allowed values: stable | canary
+track: stable
+
+# canary.enabled=true suppresses Service and HPA creation (canary shares the stable service).
+canary:
+  enabled: false
+
+image:
+  repository: yourdockerhubusername/self-healing-app
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+
+env:
+  SERVICE_NAME: "app-a"
+  JAEGER_ENDPOINT: "http://jaeger-collector.monitoring:14268/api/traces"
+
+resources:
+  requests:
+    cpu: "100m"
+    memory: "64Mi"
+  limits:
+    cpu: "250m"
+    memory: "128Mi"
+
+# Liveness probe — K8s restarts pod if /health fails 3x
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  failureThreshold: 3
+
+# Readiness probe — pod removed from Service endpoints until /ready passes
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 3
+  failureThreshold: 2
+
+# Horizontal Pod Autoscaler
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+
+# Pod Disruption Budget — keeps at least minAvailable pods running during node drains / upgrades.
+# Disabled for canary releases automatically (canary uses stable's PDB).
+pdb:
+  enabled: true
+  minAvailable: 1
+
+# Prometheus scraping annotations
+prometheus:
+  scrape: "true"
+  port: "8080"
+  path: "/metrics"

@@ -1,0 +1,18 @@
+{{- if not .Values.canary.enabled }}
+{{- $appName := .Values.appName | default .Release.Name }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $appName }}
+  labels:
+    app: {{ $appName }}
+spec:
+  type: {{ .Values.service.type }}
+  # Selector intentionally omits `track` so it routes to both stable AND canary pods.
+  selector:
+    app: {{ $appName }}
+  ports:
+    - protocol: TCP
+      port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.targetPort }}
+{{- end }}

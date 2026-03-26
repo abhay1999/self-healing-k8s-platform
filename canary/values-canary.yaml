@@ -1,0 +1,65 @@
+# Helm values for a canary release.
+# Deploy alongside the stable release with:
+#   helm install app-a-canary ./helm-chart \
+#     -f canary/values-canary.yaml \
+#     --set image.tag=<new-image-tag>
+#
+# Traffic split is proportional to replica counts:
+#   1 canary / (9 stable + 1 canary) = ~10% canary traffic
+
+# Share the stable release's app label so the existing service routes to canary pods too.
+appName: "app-a"
+
+track: canary
+
+canary:
+  enabled: true   # suppresses Service and HPA — reuses stable's service
+
+replicaCount: 1
+
+image:
+  repository: yourdockerhubusername/self-healing-app
+  tag: "canary"   # override at deploy time: --set image.tag=<sha>
+  pullPolicy: IfNotPresent
+
+env:
+  SERVICE_NAME: "app-a-canary"
+  JAEGER_ENDPOINT: "http://jaeger-collector.monitoring:14268/api/traces"
+
+# Keep the same resource profile as stable
+resources:
+  requests:
+    cpu: "100m"
+    memory: "64Mi"
+  limits:
+    cpu: "250m"
+    memory: "128Mi"
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 3
+  failureThreshold: 2
+
+hpa:
+  enabled: false   # canary scales manually; HPA belongs to stable
+
+prometheus:
+  scrape: "true"
+  port: "8080"
+  path: "/metrics"
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
