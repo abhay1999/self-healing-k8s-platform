@@ -1,271 +1,91 @@
 # Self-Healing Kubernetes Platform
 
-![CI/CD](https://github.com/yourusername/self-healing-k8s-platform/actions/workflows/ci-cd.yaml/badge.svg)
-![Go Version](https://img.shields.io/badge/Go-1.22-blue)
-![Kubernetes](https://img.shields.io/badge/Kubernetes-1.29-blue)
+[![CI/CD](https://github.com/abhay1999/self-healing-k8s-platform/actions/workflows/ci-cd.yaml/badge.svg)](https://github.com/abhay1999/self-healing-k8s-platform/actions/workflows/ci-cd.yaml)
+[![Go Version](https://img.shields.io/badge/Go-1.22-00ADD8?logo=go)](https://go.dev/)
+[![Kubernetes](https://img.shields.io/badge/Kubernetes-1.29-326CE5?logo=kubernetes)](https://kubernetes.io/)
+[![Helm](https://img.shields.io/badge/Helm-3-0F1689?logo=helm)](https://helm.sh/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A production-grade, self-healing Kubernetes platform built from scratch. Demonstrates CI/CD automation, full observability (metrics, dashboards, tracing), automatic failure recovery, chaos engineering, canary deployments, and a custom Kubernetes controller — all deployed on a local Minikube cluster.
+> A production-grade platform that automatically detects and recovers from failures in Kubernetes — no human intervention required.
+
+---
+
+## The Problem
+
+Every production system eventually faces the same 3am incident:
+
+| Scenario | Traditional Response | This Platform |
+|---|---|---|
+| Pod crashes (OOM, bug, bad config) | Alert fires → engineer wakes up → restarts manually | Liveness probe detects failure → container restarts automatically |
+| Bad deployment breaks users | Engineer manually runs rollback | Post-deploy health check triggers `helm rollback` |
+| Pod stuck in CrashLoopBackOff | Engineer deletes pod | Custom controller detects restart count → deletes and reschedules |
+| Traffic spike overwhelms service | Engineer manually scales up | HPA scales to 5 replicas at 70% CPU — no ticket needed |
+| Node drained for maintenance | Pod evicted, service drops | PodDisruptionBudget blocks eviction until replacement is ready |
+| New version has hidden bug | All users hit the bug | Canary routes 10% traffic first — rollback before full exposure |
+
+**The answer isn't more on-call rotations. It's automating the response.**
 
 ---
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        GITHUB ACTIONS CI/CD                         │
-│  push → build image → push to Docker Hub → helm upgrade → health   │
-│                         check → auto-rollback if unhealthy          │
-└───────────────────────────────┬─────────────────────────────────────┘
-                                │ helm upgrade / rollback
-                                ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                        KUBERNETES CLUSTER (Minikube)                │
-│                                                                     │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │  Service: app-a  (selector: app=app-a)                       │   │
-│  │  Routes traffic to stable + canary pods by replica ratio     │   │
-│  └────────────┬───────────────────────────┬─────────────────────┘   │
-│               │ ~90%                      │ ~10%                    │
-│  ┌────────────▼──────────┐  ┌─────────────▼──────────┐            │
-│  │  Stable Deployment    │  │  Canary Deployment      │            │
-│  │  track: stable        │  │  track: canary          │            │
-│  │  replicas: 9          │  │  replicas: 1            │            │
-│  │  image: v1.0          │  │  image: v2.0 (new)      │            │
-│  │                       │  │                         │            │
-│  │  /health  /ready      │  │  /health  /ready        │            │
-│  │  /metrics /crash      │  │  /metrics /crash        │            │
-│  └───────────────────────┘  └─────────────────────────┘            │
-│                                                                     │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │  Self-Healing Controller (custom Go controller)              │   │
-│  │  Watches all pods → restarts > 3 times → delete + reschedule │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-│                                                                     │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │  Kubernetes Native Self-Healing                              │   │
-│  │  • Liveness probe  → restart container on /health failure    │   │
-│  │  • Readiness probe → remove from service on /ready failure   │   │
-│  │  • HPA             → scale 2–5 replicas at 70% CPU          │   │
-│  │  • RollingUpdate   → zero-downtime deploys                   │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-│                                                                     │
-│  ┌──────────────────────── monitoring namespace ────────────────┐   │
-│  │  Prometheus :9090   Grafana :3000   AlertManager :9093       │   │
-│  │  Jaeger :16686 (distributed tracing via OpenTelemetry)       │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────┘
-```
+```mermaid
+flowchart TB
+    subgraph ci["⚙️ GitHub Actions CI/CD"]
+        push[git push to main] --> build[Build Docker Image]
+        build --> registry[Push to Docker Hub]
+        registry --> deploy[helm upgrade]
+        deploy --> check{Health Check}
+        check -->|CrashLoopBackOff| rollback[helm rollback ↩]
+        check -->|All pods healthy| live[✓ Live]
+    end
 
-| Layer | Tools |
-|---|---|
-| CI/CD Pipeline | GitHub Actions + Docker Hub |
-| Kubernetes Orchestration | Minikube + Helm |
-| Microservice | Go (HTTP server with Prometheus metrics + OpenTelemetry traces) |
-| Metrics | Prometheus (kube-prometheus-stack) |
-| Dashboards | Grafana |
-| Distributed Tracing | Jaeger |
-| Self-Healing | Liveness/Readiness Probes, Helm auto-rollback, Custom Controller |
-| Canary Deployments | Helm-based label traffic splitting with promote/rollback scripts |
-| Chaos Engineering | Random pod kill script |
+    subgraph k8s["☸️ Kubernetes Cluster"]
+        subgraph traffic["Traffic Layer"]
+            ingress[Nginx Ingress] --> svc[Service: app-a]
+            svc -->|90%| stable["Stable Pods\n● ● ● ● ● ● ● ● ●\ntrack=stable"]
+            svc -->|10%| canary["Canary Pods\n●\ntrack=canary"]
+        end
 
----
+        subgraph selfheal["🔧 Self-Healing Layer"]
+            liveness["Liveness Probe\n/health every 5s"] -->|fail 3×| restart[Restart Container]
+            readiness["Readiness Probe\n/ready every 3s"] -->|fail 2×| remove[Remove from Service]
+            ctrl["Custom Go Controller\nwatches all pods"] -->|restarts > 3| delete[Delete + Reschedule]
+            hpa["HPA"] -->|CPU > 70%| scale[Scale 2 → 5 replicas]
+            pdb["PodDisruptionBudget"] -->|node drain| block[Block until safe]
+        end
 
-## Quick Start
+        subgraph obs["📊 Observability (monitoring ns)"]
+            prom["Prometheus :9090\nmetrics scraping"]
+            grafana["Grafana :3000\ndashboards"]
+            jaeger["Jaeger :16686\ndistributed traces"]
+            alerts["AlertManager\nalert routing"]
+            prom --> grafana
+            prom --> alerts
+        end
+    end
 
-### Prerequisites
-
-```bash
-brew install docker kubectl helm minikube go
-```
-
-### 1. Start Minikube
-
-```bash
-minikube start --driver=docker --memory=4096 --cpus=2
-kubectl get nodes   # should show 1 node Ready
-```
-
-### 2. Deploy the App
-
-```bash
-# Point Docker at Minikube's registry
-eval $(minikube docker-env)
-
-# Build image locally
-docker build -t self-healing-app:latest ./app
-
-# Deploy via Helm
-helm install app-a ./helm-chart \
-  --set image.repository=self-healing-app \
-  --set image.tag=latest \
-  --set image.pullPolicy=Never
-
-kubectl get pods   # Should show 2 Running pods
-```
-
-### 3. Access the App
-
-```bash
-kubectl port-forward svc/app-a 8080:80
-curl http://localhost:8080/         # {"status":"ok","service":"app-a"}
-curl http://localhost:8080/health   # {"status":"healthy"}
-curl http://localhost:8080/metrics  # Prometheus metrics
-```
-
-### 4. Install Observability Stack
-
-```bash
-./observability/install.sh
-
-# Access UIs:
-kubectl port-forward svc/prometheus-operated 9090:9090 -n monitoring
-kubectl port-forward svc/prometheus-grafana 3000:80 -n monitoring    # admin/admin123
-kubectl port-forward svc/jaeger-query 16686:16686 -n monitoring
+    ci -->|deploys to| k8s
+    stable -->|/metrics| prom
+    stable -->|OTel spans| jaeger
+    canary -->|/metrics| prom
 ```
 
 ---
 
-## Self-Healing Demo
+## How It Works
 
-### Simulate a crash
+The platform has **7 layers of automated recovery**, each handling a different failure class:
 
-```bash
-# Hit the crash endpoint — pod will exit with code 1
-curl http://localhost:8080/crash
-
-# Watch K8s restart it automatically (liveness probe detects failure)
-kubectl get pods -w
-```
-
-Expected output:
-```
-NAME                     READY   STATUS             RESTARTS
-app-a-xxxx               0/1     CrashLoopBackOff   1
-app-a-xxxx               1/1     Running            2      # <-- auto-restarted!
-```
-
-### Simulate a bad deploy + auto-rollback
-
-```bash
-# Deploy a broken image
-helm upgrade app-a ./helm-chart --set image.tag=broken-does-not-exist
-
-# Run the rollback script
-./self-healing/auto-rollback.sh app-a 30
-
-# Check Helm history
-helm history app-a
-```
-
----
-
-## Canary Deployment
-
-Two strategies are available. Both use the same `track` label system on pods.
-
-### Strategy A — Replica-ratio (no extra dependencies)
-
-Traffic splits by replica count ratio. Simple, works on bare Minikube with no ingress controller.
-
-```
-Service: app-a  (selector: app=app-a — matches both tracks)
-    ├── Stable pods  (track=stable, 9 replicas) ← ~90% traffic
-    └── Canary pods  (track=canary, 1 replica)  ←  ~10% traffic
-```
-
-```bash
-./canary/deploy-canary.sh <new-image-tag>          # deploy ~10% canary
-./canary/promote-canary.sh <new-image-tag>          # promote: upgrade stable, remove canary
-./canary/rollback-canary.sh                         # rollback: remove canary instantly
-```
-
-### Strategy B — Nginx Ingress weight (exact percentage)
-
-Nginx routes exactly N% of requests to the canary backend regardless of replica counts. Requires the Nginx ingress controller (enabled automatically by the script).
-
-```
-Nginx Ingress
-    ├── app-a (stable ingress)  ← 90% of requests
-    └── app-a-canary (canary ingress, weight=10) ← exactly 10% of requests
-              └── app-a-canary Service  (selector: app=app-a, track=canary)
-                        └── Canary pods
-```
-
-```bash
-# Deploy with exact 10% weight
-./canary/nginx-deploy-canary.sh <new-image-tag>
-
-# Deploy with custom weight (e.g. 25%)
-./canary/nginx-deploy-canary.sh <new-image-tag> 25
-
-# Adjust weight live (no redeploy needed)
-kubectl annotate ingress app-a-canary \
-  nginx.ingress.kubernetes.io/canary-weight=25 --overwrite
-
-# Verify the split (run ~20 times, count canary vs stable responses)
-for i in $(seq 1 20); do curl -s http://app.local/ | jq -r .service; done | sort | uniq -c
-
-# Promote or rollback
-./canary/promote-canary.sh <new-image-tag>
-./canary/nginx-rollback-canary.sh
-```
-
-### Validate either strategy
-
-```bash
-# Watch pods by track label
-kubectl get pods -l app=app-a -o wide -w
-
-# Tail canary logs specifically
-kubectl logs -l "app=app-a,track=canary" -f
-
-# Watch Grafana dashboards for error rate / latency delta
-kubectl port-forward svc/prometheus-grafana 3000:80 -n monitoring
-```
-
----
-
-## Chaos Testing
-
-Run the chaos script while watching Grafana dashboards:
-
-```bash
-./chaos-testing/kill-pods.sh 30 app-a   # kill a random pod every 30 seconds
-```
-
-Open Grafana at `localhost:3000` and watch the pod restart count — traffic should never fully drop.
-
----
-
-## Custom Controller
-
-The Go controller in `controller/` watches all pods. When a pod restarts more than 3 times, it deletes and forces a fresh replacement:
-
-```bash
-# Build and deploy the controller
-cd controller
-docker build -t self-healing-controller:latest .
-kubectl apply -f deploy.yaml
-
-# Watch controller logs
-kubectl logs -f deployment/self-healing-controller
-```
-
----
-
-## CI/CD Pipeline
-
-Every push to `main` triggers:
-
-1. **Build** — Docker image built from `./app`
-2. **Push** — Image pushed to Docker Hub tagged with commit SHA
-3. **Deploy** — `helm upgrade` deploys new image to K8s
-4. **Health Check** — Script checks for CrashLoopBackOff; auto-rolls back if found
-
-Add these GitHub Secrets to enable it:
-- `DOCKERHUB_USERNAME`
-- `DOCKERHUB_TOKEN`
-- `KUBECONFIG` (base64-encoded kubeconfig: `cat ~/.kube/config | base64`)
+| Layer | Mechanism | Trigger | Recovery Action |
+|---|---|---|---|
+| 1 | **Liveness Probe** | `/health` fails 3× in 15s | Restart the container |
+| 2 | **Readiness Probe** | `/ready` fails 2× in 6s | Stop sending traffic to pod |
+| 3 | **Custom Go Controller** | Any container restarts > 3× | Delete pod → K8s reschedules fresh |
+| 4 | **Helm Auto-Rollback** | CrashLoopBackOff after deploy | `helm rollback` to last known-good revision |
+| 5 | **HPA** | CPU > 70% sustained | Scale from 2 → up to 5 replicas |
+| 6 | **PodDisruptionBudget** | Node drain / voluntary eviction | Block until replacement pod is ready |
+| 7 | **Canary Rollback** | Bad canary validation | Remove canary → 100% traffic back to stable |
 
 ---
 
@@ -273,73 +93,265 @@ Add these GitHub Secrets to enable it:
 
 ```
 self-healing-k8s-platform/
-├── app/                        # Go microservice
-│   ├── main.go                 # HTTP server + Prometheus metrics + Jaeger traces
-│   ├── Dockerfile              # Multi-stage build
+│
+├── app/                          # Go microservice
+│   ├── main.go                   # HTTP server: /, /health, /ready, /metrics, /crash
+│   ├── main_test.go              # Unit tests (handlers, middleware, responseWriter)
+│   ├── Dockerfile                # Multi-stage build → minimal alpine image
 │   └── go.mod
-├── helm-chart/                 # Helm chart (supports stable + canary releases)
+│
+├── controller/                   # Custom Kubernetes controller
+│   ├── main.go                   # Watches pods, deletes those with restarts > 3
+│   ├── reconciler_test.go        # Unit tests using fake k8s client
+│   ├── deploy.yaml               # Deployment + ClusterRole RBAC
+│   └── go.mod
+│
+├── helm-chart/                   # Kubernetes packaging
 │   ├── Chart.yaml
-│   ├── values.yaml             # Liveness/readiness probes, HPA, canary flags
+│   ├── values.yaml               # All tuneable defaults
 │   └── templates/
-│       ├── deployment.yaml     # Pods labelled with app + track for traffic splitting
-│       ├── service.yaml        # Selects by app only — routes to stable AND canary
-│       └── hpa.yaml            # Disabled automatically for canary releases
-├── canary/                     # Canary deployment workflow
-│   ├── values-canary.yaml      # Helm values for canary release (1 replica, no service/HPA)
-│   ├── deploy-canary.sh        # Strategy A: replica-ratio canary deploy
-│   ├── promote-canary.sh       # Promote canary image to stable, remove canary release
-│   ├── rollback-canary.sh      # Strategy A: remove canary, restore 100% stable traffic
-│   ├── nginx-deploy-canary.sh  # Strategy B: Nginx ingress exact-weight canary deploy
-│   ├── nginx-rollback-canary.sh # Strategy B: remove canary ingress + service + release
-│   ├── nginx-ingress-stable.yaml  # Stable Nginx ingress manifest
-│   ├── nginx-ingress-canary.yaml  # Canary Nginx ingress (canary-weight annotation)
-│   └── nginx-service-canary.yaml  # Dedicated service selecting track=canary pods only
+│       ├── deployment.yaml       # Pods with app + track labels for traffic splitting
+│       ├── service.yaml          # Routes to stable AND canary pods (no track selector)
+│       ├── hpa.yaml              # CPU-based autoscaler (disabled for canary)
+│       └── pdb.yaml              # PodDisruptionBudget (disabled for canary)
+│
+├── canary/                       # Canary deployment workflows
+│   ├── values-canary.yaml        # Helm overrides: 1 replica, no service, track=canary
+│   ├── deploy-canary.sh          # Strategy A: replica-ratio traffic split
+│   ├── promote-canary.sh         # Upgrade stable image, remove canary release
+│   ├── rollback-canary.sh        # Remove canary → 100% stable
+│   ├── nginx-deploy-canary.sh    # Strategy B: exact-weight Nginx ingress split
+│   ├── nginx-rollback-canary.sh  # Remove Nginx canary ingress + service + release
+│   ├── nginx-ingress-stable.yaml # Stable ingress manifest
+│   ├── nginx-ingress-canary.yaml # Canary ingress (canary-weight annotation)
+│   └── nginx-service-canary.yaml # Service selecting only track=canary pods
+│
 ├── observability/
-│   ├── prometheus-values.yaml  # kube-prometheus-stack config
-│   ├── jaeger-values.yaml      # Jaeger tracing config
-│   └── install.sh              # One-shot observability stack installer
+│   ├── prometheus-values.yaml    # kube-prometheus-stack Helm values
+│   ├── jaeger-values.yaml        # Jaeger all-in-one Helm values
+│   └── install.sh                # One-command: installs Prometheus + Grafana + Jaeger
+│
 ├── self-healing/
-│   ├── alertmanager-rules.yaml # CrashLoopBackOff + latency alerts
-│   └── auto-rollback.sh        # Post-deploy health check + rollback script
-├── controller/
-│   ├── main.go                 # Custom K8s controller (watches pods, auto-heals)
-│   ├── deploy.yaml             # Controller deployment + RBAC
-│   └── go.mod
+│   ├── auto-rollback.sh          # Post-deploy health check + helm rollback
+│   └── alertmanager-rules.yaml   # Alerts: CrashLoop, high error rate, slow p95
+│
 ├── chaos-testing/
-│   └── kill-pods.sh            # Random pod killer for chaos experiments
-├── .github/workflows/
-│   └── ci-cd.yaml              # GitHub Actions pipeline
-└── README.md
+│   └── kill-pods.sh              # Randomly kills pods on interval to test resilience
+│
+└── .github/workflows/
+    └── ci-cd.yaml                # Build → Push → Deploy → Health check → Rollback
 ```
 
 ---
 
-## Key Concepts Demonstrated
+## Deployment Guide
 
-| Concept | Implementation |
+### Prerequisites
+
+```bash
+# macOS
+brew install docker kubectl helm minikube go jq
+
+# Verify
+docker info
+minikube version
+helm version
+kubectl version --client
+go version
+```
+
+### Step 1 — Start the cluster
+
+```bash
+minikube start --driver=docker --memory=4096 --cpus=2
+
+kubectl get nodes
+# NAME       STATUS   ROLES           AGE   VERSION
+# minikube   Ready    control-plane   10s   v1.29.x
+```
+
+### Step 2 — Build the app image
+
+```bash
+# Point Docker CLI at Minikube's internal registry (no push to Docker Hub needed)
+eval $(minikube docker-env)
+
+docker build -t self-healing-app:latest ./app
+docker images | grep self-healing-app
+```
+
+### Step 3 — Deploy with Helm
+
+```bash
+helm install app-a ./helm-chart \
+  --set image.repository=self-healing-app \
+  --set image.tag=latest \
+  --set image.pullPolicy=Never
+
+# Watch pods come up (~20 seconds)
+kubectl get pods -w
+# NAME                    READY   STATUS    RESTARTS   AGE
+# app-a-xxxxxxxxx-xxxxx   1/1     Running   0          15s
+# app-a-xxxxxxxxx-xxxxx   1/1     Running   0          15s
+```
+
+### Step 4 — Verify the app
+
+```bash
+kubectl port-forward svc/app-a 8080:80
+
+curl http://localhost:8080/         # {"service":"app-a","status":"ok"}
+curl http://localhost:8080/health   # {"status":"healthy"}
+curl http://localhost:8080/ready    # {"status":"ready"}
+curl http://localhost:8080/metrics  # Prometheus metrics
+```
+
+### Step 5 — Install the observability stack
+
+```bash
+./observability/install.sh
+# Installs: kube-prometheus-stack (Prometheus + Grafana + AlertManager) + Jaeger
+# Takes ~3 minutes
+
+kubectl get pods -n monitoring
+# Wait until all pods show STATUS=Running
+```
+
+```bash
+# Open 3 terminals:
+kubectl port-forward svc/prometheus-operated 9090:9090 -n monitoring   # Prometheus
+kubectl port-forward svc/prometheus-grafana 3000:80 -n monitoring      # Grafana (admin/admin123)
+kubectl port-forward svc/jaeger-query 16686:16686 -n monitoring        # Jaeger
+```
+
+### Step 6 — Deploy the custom controller
+
+```bash
+eval $(minikube docker-env)
+docker build -t self-healing-controller:latest ./controller
+
+kubectl apply -f controller/deploy.yaml
+kubectl logs -f deployment/self-healing-controller
+```
+
+### Step 7 — Enable CI/CD (optional)
+
+Add these secrets to your GitHub repo (`Settings → Secrets → Actions`):
+
+| Secret | Value |
 |---|---|
-| **Liveness Probes** | K8s restarts containers that fail `/health` checks |
-| **Readiness Probes** | Traffic only routes to pods that pass `/ready` |
-| **Helm Rollbacks** | One command to revert to any previous deployment |
-| **Custom Controller** | Go program using `controller-runtime` to extend K8s with custom healing logic |
-| **Prometheus Metrics** | Custom counters and histograms exported from Go app |
-| **Grafana Dashboards** | Real-time visualization of cluster and app health |
-| **Distributed Tracing** | Every request traced end-to-end with Jaeger + OpenTelemetry |
-| **Chaos Engineering** | Deliberate failure injection to validate system resilience |
-| **Pod Disruption Budget** | Guarantees minimum pod availability during node drains and voluntary disruptions |
-| **Canary Deployments** | Two strategies: replica-ratio (no deps) and Nginx ingress exact-weight splitting |
+| `DOCKERHUB_USERNAME` | your Docker Hub username |
+| `DOCKERHUB_TOKEN` | Docker Hub access token |
+| `KUBECONFIG` | `cat ~/.kube/config \| base64` |
+
+Every push to `main` will then: build image → push → deploy → health check → auto-rollback if unhealthy.
 
 ---
 
-## Self-Healing Mechanisms Summary
+## Demo Scenarios
 
-| Mechanism | Level | Trigger | Action |
-|---|---|---|---|
-| Liveness Probe | K8s Native | `/health` fails 3× | Restart container |
-| Readiness Probe | K8s Native | `/ready` fails 2× | Remove pod from service |
-| Custom Controller | Application | Restarts > 3 | Delete pod → reschedule fresh |
-| Helm Auto-Rollback | CI/CD | CrashLoopBackOff post-deploy | `helm rollback` to last good release |
-| HPA | K8s Native | CPU > 70% | Scale up to 5 replicas |
-| Rolling Update | K8s Native | New deployment | Zero-downtime: maxSurge=1, maxUnavailable=0 |
-| Pod Disruption Budget | K8s Native | Node drain / voluntary disruption | Block disruption if it drops below minAvailable |
-| Canary Rollback | Deployment | Bad canary validation | Remove canary → 100% stable traffic |
+### Scenario 1 — Pod crash and self-healing
+
+```bash
+# Terminal 1: watch pods
+kubectl get pods -w
+
+# Terminal 2: trigger crash
+kubectl port-forward svc/app-a 8080:80
+curl http://localhost:8080/crash
+```
+
+Watch terminal 1:
+```
+app-a-xxx   1/1   Running            0    → CrashLoopBackOff 1 → Running 2
+```
+K8s detects the `/health` probe failure and restarts the container automatically.
+
+---
+
+### Scenario 2 — Bad deploy + auto-rollback
+
+```bash
+helm upgrade app-a ./helm-chart \
+  --set image.repository=self-healing-app \
+  --set image.tag=does-not-exist \
+  --set image.pullPolicy=Never
+
+kubectl get pods -w   # pods go into ErrImageNeverPull
+
+./self-healing/auto-rollback.sh app-a 30
+
+helm history app-a
+# REVISION  STATUS      DESCRIPTION
+# 1         superseded  Install complete
+# 2         failed      Upgrade failed
+# 3         deployed    Rollback to 1
+```
+
+---
+
+### Scenario 3 — Chaos testing (zero-downtime validation)
+
+```bash
+# Terminal 1: keep sending requests
+watch -n 0.5 'curl -s http://localhost:8080/ | jq .service'
+
+# Terminal 2: kill pods randomly every 10 seconds
+./chaos-testing/kill-pods.sh 10 app-a
+```
+
+The watch window should never stop responding — K8s reschedules replacement pods before the service notices.
+
+---
+
+### Scenario 4 — Canary deployment
+
+```bash
+# Tag a "v2" image
+eval $(minikube docker-env)
+docker tag self-healing-app:latest self-healing-app:v2
+
+# Deploy to 10% of traffic
+./canary/deploy-canary.sh v2
+
+# Verify traffic split
+kubectl get pods -l app=app-a -o wide
+for i in $(seq 1 20); do curl -s http://localhost:8080/ | jq -r .service; done | sort | uniq -c
+#   18 app-a         ← stable
+#    2 app-a-canary  ← canary (~10%)
+
+# Promote or roll back
+./canary/promote-canary.sh v2      # v2 becomes stable
+./canary/rollback-canary.sh        # remove canary, 100% back to v1
+```
+
+---
+
+## Running Tests
+
+```bash
+# App unit tests (no cluster needed)
+cd app && go test ./... -v
+
+# Controller unit tests (uses fake k8s client — no cluster needed)
+cd controller && go test ./... -v
+```
+
+Tests cover: all HTTP handlers, Prometheus instrumentation middleware, responseWriter status capture, and all reconciler scenarios (skip namespaces, threshold boundary, multi-container pods, pod not found).
+
+---
+
+## Key Technologies
+
+| Technology | Role |
+|---|---|
+| **Go 1.22** | Microservice + custom Kubernetes controller |
+| **Kubernetes 1.29** | Container orchestration, probes, HPA, PDB |
+| **Helm 3** | Deployment packaging, rollback management |
+| **Prometheus** | Metrics collection (`http_requests_total`, `http_request_duration_seconds`) |
+| **Grafana** | Real-time dashboards for cluster and app health |
+| **Jaeger + OpenTelemetry** | Distributed tracing for every HTTP request |
+| **AlertManager** | Alert routing for CrashLoop, error rate, latency |
+| **GitHub Actions** | CI/CD pipeline with automated health checks |
+| **Nginx Ingress** | Weight-based canary traffic splitting |
+| **controller-runtime** | Custom operator framework |
